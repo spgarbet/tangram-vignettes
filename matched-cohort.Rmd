@@ -1,0 +1,411 @@
+---
+title: "Matched Cohort Tables"
+author: "Shawn Garbett, Kyle Rove"
+date: '`r Sys.Date()`'
+output:
+  pdf_document: null
+  html_document: null
+header-includes:
+- \usepackage[LGR,T1]{fontenc}
+- \usepackage[utf8]{inputenc}
+- \usepackage{textgreek}
+- \usepackage{float}
+- \usepackage[x11names,dvipsnames,table]{xcolor}
+- \usepackage{boldline}
+- \usepackage{multirow}
+- \usepackage{colortbl}
+- \usepackage{hhline}
+- \usepackage{longtable}
+- \usepackage{relsize}
+email: shawn.garbett@vumc.org
+vignette: |
+  %\VignetteIndexEntry{Matched Cohort Examples}
+  %\VignetteEngine{knitr::rmarkdown}
+---
+
+<style type="text/css">
+
+body, td {
+   font-size: 12px;
+}
+code.r{
+  font-size: 12px;
+}
+pre {
+  font-size: 10px
+}
+
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tangram)
+
+library(tidyverse)
+library(MatchIt)
+library(geepack)
+library(broom)
+library(DescTools)
+library(exact2x2)
+
+pbc <- tangram::pbc
+
+# This is necessary for changing size of chunks in LaTeX. Why isn't this patched in knitr?
+# https://stackoverflow.com/questions/25646333/code-chunk-font-size-in-rmarkdown-with-knitr-and-latex/46526740
+# ?highlight
+def.chunk.hook  <- knitr::knit_hooks$get("chunk")
+knitr::knit_hooks$set(chunk = function(x, options) {
+  x <- def.chunk.hook(x, options)
+  ifelse(options$size != "normalsize", paste0("\\", options$size,"\n\n", x, "\n\n \\normalsize"), x)
+})
+
+pagebreak <- function() {
+  if(knitr::is_latex_output())
+    return("\\newpage")
+  else
+    return('<div style="page-break-before: always;" />')
+}
+```
+
+## Matched Cohort
+
+A matched cohort study utilizes specific summary statistics across the group. Recommendations are taken from the following references:
+
+  * Austin PC. A critical appraisal of propensity-score matching in the medical literature between 1996 and 2003. Statist Med 2008; 27: 2037–49. doi:10.1002/sim.3150.
+  * Fleiss JL, Levin B, Paik MC. Statistical Methods for Rates and Proportions (3rd edn). Wiley: New York, NY, 2003.
+  
+The goal is to be able to use tangram defaults as much as possible, while using the following tests.
+
+### For 1:1 matching
+
+| variables | statistical test | Notes|
+|:--|:----|:--------|
+| Numeric x Cat    | paired Student's t        | `t.test(x=covariate, y=arm, paired=TRUE)`      | 
+|                  | Wilcoxon  *(preferred)*     | `wilcox.test(x=covariate, y=arm, paired=TRUE)` |
+|                  | Cox proportional hazards models stratifying on matched groups | `survival::coxph(outcome ~ covariate + strata(block), data = m1.final)` |
+|                  |                           | useful for time to event analysis |
+| Cat X Cat        | McNemar's                 | `mcnemar.test(x=covariate, y=arm)` |
+|                  |                           | 2 x 2 cases only. Expects factors |
+|                  | Stuart Maxwell chi-squared test | `DescTools::StuartMaxwellTest(x=covariate, y=arm)` |
+|                  |                           | for 2 x k polytomous covariates, where k >= 2 |
+|                  |                           | expects factors |
+
+### For 1:many matching
+
+| variables | statistical test | Notes|  |
+|:--|:----|:--------|
+| Numeric x Cat   |   logistic regression with generalized estimated equations | `geepack::geeglm(formula = outcome ~ covariate,` `family = binomial("logit"), data = m2.final, id = block,` `corstr = "independence", zcor = "zcor")` |
+|                 | | outcome must be binary numeric (not a factor) |
+|                 | | covariate must be numeric |
+|                 | | block must be numeric (not a factor) |
+| Cat x Cat       | conditional logistic regression | `survival::clogit(outcome ~ covariate + strata(block), data = m2.final)` | Cat x Cat       | Cochran-Mantel-Haenszel chi-squared test | `stats::mantelhaen.test(x=covariate, y=arm, z=block)` |
+|                 | | strata with only 1 occurence cause errors, there should be check for this
+|                 | | covers 2 x 2 and 2 x >2 polytomous covariates
+
+```{r, include=FALSE}
+
+# Create fake data to work with
+
+set.seed(1)
+
+# patient identifier
+study_id <- c(1:100)
+
+# match on these variables
+age     <- rnorm(n=length(study_id),mean=10,sd=2)                            # years
+sex     <- factor(sample(c(0,1), replace=TRUE, size=length(study_id)))       # M=0, F=1
+lang    <- factor(sample(c(0,1,2,3), replace=TRUE, size=length(study_id)))   # 0 = english, 1 = spanish, 2 = french, 3 = other
+
+# outcomes
+opioids <- rlnorm(n=length(study_id),0.88,0.67)                              # opioids in mg/kg
+los     <- rlnorm(n=length(study_id),3.4,0.67)                               # length of stay in days
+nsaid   <- factor(c(rep(0,20),rep(1,80)))                                    # 0 = no nsaid given, 1 = nsaid given
+neuro   <- factor(sample(c(0,1,2,3,4), replace=TRUE, size=length(study_id))) # 0 = cervical, 1 = thoracic, 2 = lumbar, 3 = sacral, 4 = other
+
+# comparison / arm
+group   <- c(rep(0,70),rep(1,30))                                            # 0 = historical, 1 = prospective cohort
+
+# create data frame
+df     <- as_tibble(cbind(study_id,age,sex,lang,opioids,los,nsaid,neuro,group))
+
+# 1:1 example
+m1.out    <- matchit(group ~ age + sex + lang, data = df, method = "nearest", ratio = 1)
+m1.df     <- match.data(m1.out)
+m1.treat  <- as_tibble(df[row.names(m1.out$match.matrix),"study_id"]) %>%
+             mutate(block = row_number())
+m1.final  <- as_tibble(df[m1.out$match.matrix,"study_id"]) %>%
+             mutate(block = row_number()) %>% 
+             rbind(m1.treat) %>%
+             left_join(m1.df,by="study_id") %>%
+             arrange (block,group)
+
+# 2:1 example
+m2.out    <- matchit(group ~ age + sex + lang, data = df, method = "nearest", ratio = 2)
+m2.df     <- match.data(m2.out)
+m2.treat  <- as_tibble(df[row.names(m2.out$match.matrix),"study_id"]) %>%
+             mutate(block = row_number())
+m2.contr1 <- as_tibble(df[m2.out$match.matrix[,1],"study_id"]) %>%
+             mutate(block = row_number())
+m2.contr2 <- as_tibble(df[m2.out$match.matrix[,2],"study_id"]) %>%
+             mutate(block = row_number())
+m2.final  <- m2.treat %>% rbind(m2.contr1,m2.contr2) %>%
+             left_join(m2.df,by="study_id") %>%
+             arrange (block,group) 
+
+# change factors back to factors
+m1.final$group <- factor(m1.final$group, levels=0:1, labels=c("Historical", "Prospective"))
+m1.final$sex   <- factor(m1.final$sex, levels=1:2, labels=c("Male", "Female") )
+m1.final$lang  <- factor(m1.final$lang, levels=1:4, labels=c("English", "Spanish", "French", "Other"))
+m1.final$nsaid <- factor(m1.final$nsaid, levels=1:2, labels=c("No", "Yes"))
+m1.final$neuro <- factor(m1.final$neuro, levels=1:5, labels=c("Cervical", "Thoracic", "Lumbar", "Sacral", "Other"))
+m2.final$group <- factor(m2.final$group, levels=0:1, labels=c("Historical", "Prospective"))
+m2.final$sex   <- factor(m2.final$sex, levels=1:2, labels=c("Male", "Female"))
+m2.final$lang  <- factor(m2.final$lang, levels=1:4, labels=c("English", "Spanish", "French", "Other"))
+m2.final$nsaid <- factor(m2.final$nsaid, levels=1:2, labels=c("No", "Yes"))
+m2.final$neuro <- factor(m2.final$neuro, levels=1:5, labels=c("Cervical", "Thoracic", "Lumbar", "Sacral", "Other"))
+
+attr(m1.final$age,   "label") <- "Age"
+attr(m1.final$opioids,"label")<- "Opioids"
+attr(m1.final$opioids,"units")<- "mg/kg"
+attr(m1.final$los,   "label") <- "Length of Stay"
+attr(m1.final$los,   "units") <- "days"
+attr(m1.final$group, "label") <- "Group"
+attr(m1.final$sex,   "label") <- "Gender"
+attr(m1.final$lang,  "label") <- "Language"
+attr(m1.final$nsaid, "label") <- "NSAID Given"
+attr(m1.final$neuro, "label") <- "Neurological"
+
+attr(m2.final$age,   "label") <- "Age"
+attr(m2.final$opioids,"label")<- "Opioids"
+attr(m2.final$opioids,"units")<- "mg/kg"
+attr(m2.final$los,   "label") <- "Length of Stay"
+attr(m2.final$los,   "units") <- "days"
+attr(m2.final$group, "label") <- "Group"
+attr(m2.final$sex,   "label") <- "Gender"
+attr(m2.final$lang,  "label") <- "Language"
+attr(m2.final$nsaid, "label") <- "NSAID Given"
+attr(m2.final$neuro, "label") <- "Neurological"
+```
+
+## Create functions for matching testing
+
+```{r ptest}
+psm <- hmisc
+
+psm[['Cell']][['fraction']] <- function(numerator, denominator, format=3, ...) {
+  paste0(numerator,' (',render_f(100*numerator/denominator, format),'%)')
+}
+
+psm[['Footnote']] = paste("N is the number of non-missing value.",
+  "^1^*t*-test.",
+  "^2^Wilcoxon signed rank test.",
+  "^3^Cox proportional hazards.",
+  "^4^Logistic regression with GEE.",
+  "^5^Conditional logistic regression.",
+  "^6^McNemar's test.",
+  "^7^Stuart Maxwell \u03a7^2^ test.",
+  "^8^Cochran-Mantel-Haenszel \u03a7^2^ test."
+)
+
+mctest.numxcat <- function(rdata, cdata, cell_style, block, pref_test="default", ...)
+{
+  # get data
+  covariate <- rdata
+  outcome   <- cdata
+  n_matched <- length(block) / length(levels(as.categorical(block)))
+  
+  # make the df and sort it
+  df <- data.frame(
+    covariate=as.numeric(covariate),
+    outcome=as.numeric(levels(factor(outcome,levels=c(0,1))))[outcome],
+                              block=as.numeric(block)
+  ) %>% arrange(block,outcome)
+  
+  p_val <- NA
+  ref   <- " "
+    
+  # first branch point is whether data is matched 1:1 or 1:many
+  if (n_matched == 2) {
+
+    # paired Student's t-test
+    if (pref_test == "t.test") {
+      # run test
+      stat <- t.test(x = df$covariate[df$outcome == 0],
+                     y = df$covariate[df$outcome == 1],
+                     paired = TRUE)
+      ref  <- "1"
+      
+      if (length(stat) > 1) p_val <- broom::tidy(stat)$p.value
+      
+    # Wilcoxon signed rank test
+    } else if (pref_test == "default" || pref_test == "wilcox.test") {
+      # run test
+      stat <- wilcox.test(x = df$covariate[df$outcome == 0],
+                          y = df$covariate[df$outcome == 1],
+                          paired=TRUE)
+      ref  <- "2"
+      
+      if (length(stat) > 1) p_val <- broom::tidy(stat)$p.value
+
+    # Cox proportional hazards model stratefied on matched pairs
+    } else if (pref_test == "coxph") {
+      # run regression
+      stat <- survival::coxph(outcome ~ covariate + strata(block), data = df)
+      ref  <- "3"
+    
+      if (length(stat) > 1) p_val <- broom::tidy(stat)$p.value
+    }
+    
+  } else if (n_matched > 2) {
+    
+    # logistic regression with generalized estimating equations
+    if (pref_test == "default" || pref_test == "geeglm") {
+      # run regression
+      stat <- suppressWarnings(
+        geepack::geeglm(formula = outcome ~ covariate,
+                        family  = binomial("logit"),
+                        data    = df,
+                        id      = block,
+                        corstr  = "independence",
+                        zcor    = "zcor")
+      )
+      ref <- "4"
+      
+      if (length(stat) > 1) p_val <- broom::tidy(stat)$p.value[[1]]
+
+    # conditional logistic regression   
+    } else if (pref_test == "clogit") {
+      # run regression
+      stat <- survival::clogit(outcome ~ covariate + strata(block), data = df)
+      ref  <- "5"    
+
+      if (length(stat) > 1) p_val <- broom::tidy(stat)$p.value[[1]]
+    } 
+  }
+  
+  paste0(cell_style[['p']](p = p_val), "^", ref, "^")
+}
+
+mctest.catxcat <- function(rdata, cdata, cell_style, block, ...)
+{
+  covariate <- as.categorical(rdata)
+  outcome   <- as.categorical(cdata)
+  block     <- as.categorical(block)
+  n_matched <- length(block) / length(levels(as.categorical(block)))
+  grid          <- table(covariate, outcome, block, useNA="no")
+  validrow      <- which(!apply(grid,1,FUN = function(x){all(x == 0)}))
+  validcol      <- which(!apply(grid,2,FUN = function(x){all(x == 0)}))
+  validblocks   <- which(!apply(grid,3,FUN = function(x){all(x == 0)}))
+  invalidstatum <- which(apply(grid,1,FUN = function(x){sum(ifelse(x==1,1,0))})==1)
+
+  # make the df and sort it
+  df <- data.frame(var=as.numeric(covariate), 
+                   outcome=as.numeric(levels(factor(outcome,levels=c(0,1))))[outcome],
+                   block=as.numeric(block) )
+  df <- df %>% arrange(block,outcome)
+  
+  p_val <- NA
+  ref   <- " "
+  
+  if (n_matched == 2 && length(levels(covariate)) == 2) {
+    # McNemar's test
+
+    # x and y must be equal length vectors and have same levels
+    # also removed hard-coded outcome levels in cases of other 2-level variables are used
+    # (e.g., "M","F" or 1,2 or "No","Yes")
+    # code above was somehow stripping a level if the responses were only one level
+    # each stats test could have exclusions based on expectations of the underlying
+    # function with smarter error handling messages
+    stat <- exact2x2::mcnemar.exact(
+      x = factor(df$var[df$outcome == levels(outcome)[[1]]], levels = levels(covariate)), 
+      y = factor(df$var[df$outcome == levels(outcome)[[2]]], levels = levels(covariate)),
+      conf.level=.95)
+    ref  <- "6"
+    
+    # get p value
+    if (length(stat) > 1) p_val <- stat$p.value
+
+  } else if (n_matched == 2 && length(levels(covariate)) > 2) {
+    
+    # Stuart Maxwell chi-squared test
+    stat <- StuartMaxwellTest(x=df$var[df$outcome == 0], y=df$var[df$outcome == 1])
+    ref  <- "7"
+
+    # get p value
+    if (length(stat) > 1) p_val <- broom::tidy(stat)$p.value[[1]]
+
+  } else if (n_matched > 2) {
+    
+    # Cochran-Mantel-Haenszel chi-squared test
+    stat <- if(length(validrow)      < 2 ||
+               length(validcol)      < 2 ||
+               length(validblocks)   < 1 ||
+               length(invalidstatum) > 0) NA else
+               mantelhaen.test(covariate,outcome,block)
+    ref  <- "8"
+
+    # get p value
+    if (length(stat) > 1) p_val <- broom::tidy(stat)$p.value
+  }
+  
+  paste0(cell_style[['p']](p = p_val), "^", ref, "^")
+}
+
+mctest <- function(row, col, cell_style, block=NULL, ...)
+{
+  if(is.null(block)) stop("Block must be specified for matched cohort testing")
+  
+  if(is.numeric(row$data)  && is.categorical(col$data))
+    return(mctest.numxcat(row$data, col$data, cell_style, block, ...))
+  if(is.categorical(row$data) && is.categorical(col$data))
+    return(mctest.catxcat(row$data, col$data, cell_style, block, ...))
+  
+  stop(paste("Unsupported comparison for", row$name, "x", col$name, "\nAppears to be", 
+    hmisc_data_type(row$data), "X", hmisc_data_type(column$data)))
+}
+```
+
+`r pagebreak()`
+
+## Results
+
+```{r match11}
+# 2-level categories are typically dependent variable in propensity score matching
+tangram ( group
+            ~ age[1]     # numeric
+            + sex        # binary categorical
+            + lang       # multi-level categorical
+            + opioids[1] # numeric
+            + los[1]     # numeric
+            + nsaid      # binary categorical
+            + neuro,     # multi-level categorical
+        data      = m1.final,
+        block     = m1.final$block,
+        test      = mctest,
+        transform = psm,
+        digits    = 2,
+        style     = "nejm",
+        caption   = "Example 1:1 Matching")
+```
+
+
+`r pagebreak()`
+
+```{r table1m}
+# 2-level categories are typically dependent variable in propensity score matching
+tangram ( group
+            ~ age[1]     # numeric
+            + sex        # binary categorical
+            + lang       # multi-level categorical
+            + opioids[1] # numeric
+            + los[1]     # numeric
+            + nsaid      # binary categorical
+            + neuro,     # multi-level categorical
+        data      = m2.final,
+        block     = m2.final$block,
+        test      = mctest,
+        transform = psm,
+        digits    = 2,
+        style     = "nejm",
+        caption   = "Match 1:k Example")
+```
