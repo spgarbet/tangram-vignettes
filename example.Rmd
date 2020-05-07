@@ -3,9 +3,9 @@ title: "Tangram Examples"
 author: "Shawn Garbett, MS"
 date: "`r Sys.Date()`"
 output:
-  pdf_document: null
   html_document:
     df_print: paged
+  pdf_document: null
 header-includes:
 - \usepackage[LGR,T1]{fontenc}
 - \usepackage[utf8]{inputenc}

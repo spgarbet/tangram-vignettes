@@ -3,8 +3,8 @@ title: "Matched Cohort Tables"
 author: "Shawn Garbett, Kyle Rove"
 date: '`r Sys.Date()`'
 output:
-  pdf_document: null
   html_document: null
+  pdf_document: null
 header-includes:
 - \usepackage[LGR,T1]{fontenc}
 - \usepackage[utf8]{inputenc}

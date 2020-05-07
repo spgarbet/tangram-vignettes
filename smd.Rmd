@@ -3,8 +3,8 @@ title: "Standardized Mean Differences (SMD)"
 author: "Shawn Garbett"
 date: '`r Sys.Date()`'
 output:
-  pdf_document: null
   html_document: null
+  pdf_document: null
 header-includes:
 - \usepackage[LGR,T1]{fontenc}
 - \usepackage[utf8]{inputenc}
@@ -12,12 +12,11 @@ header-includes:
 - \usepackage{float}
 - \usepackage[x11names,dvipsnames,table]{xcolor}
 - \usepackage{boldline}
+- \usepackage{multirow}
 - \usepackage{colortbl}
 - \usepackage{hhline}
 - \usepackage{longtable}
-- \pdfminorversion=5
-- \pdfcompresslevel=9
-- \pdfobjcompresslevel=2
+- \usepackage{relsize}
 vignette: |
   %\VignetteIndexEntry{Tangram Standardized Mean Differences (SMD)}
   %\VignetteEngine{knitr::rmarkdown}
@@ -68,7 +67,7 @@ vars <- c("age","sex","race","edu","income","ninsclas","cat1","das2d3pc","dnr1",
 
 formula <- paste0("swang1~", paste0(vars, collapse="+"))
 
-tangram(formula, rhc, "unmatched", smd, "Unmatched", style="nejm", pct_width=0.5, test=TRUE)
+tangram(formula, rhc, "unmatched", smd, "Unmatched", style="nejm", relsize=-2, test=TRUE)
 ```
 
 ## Propensity Score Matching
@@ -104,7 +103,7 @@ listMatch <- Match(Tr       = (rhc$swang1 == "RHC"),      # Need to be in 0,1
 ## Extract matched data
 rhcMatched <- rhc[unlist(listMatch[c("index.treated","index.control")]), ]
 
-tangram(formula, rhcMatched, "matched", smd, "Propensity Score Matched", style="nejm", pct_width=0.5)
+tangram(formula, rhcMatched, "matched", smd, "Propensity Score Matched", style="nejm", relsize=-2)
 ```
 
 ## Propensity Score Matching Weight
@@ -112,5 +111,5 @@ tangram(formula, rhcMatched, "matched", smd, "Propensity Score Matched", style="
 tangram(formula, rhc, "weighted", smd,
         "Propensity Score Weighted",
         style="nejm",
-        weight=rhc$pMin/rhc$pAssign, pct_width=0.5)
+        weight=rhc$pMin/rhc$pAssign, relsize=-2)
 ```
