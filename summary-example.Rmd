@@ -68,13 +68,13 @@ tangram(Species ~ Petal.Length + Petal.Width + Sepal.Length + Sepal.Width,
 
 Maybe one really prefers using `dplyr` so let's go with that.
 
-```{r, results="asis"}
+```{r, results="asis", id="iris3"}
 iris %>%
   group_by(Species) %>%
   summarise(Mean=mean(Petal.Length),
             Median=median(Petal.Length),
             SD=round(sd(Petal.Length),3) ) %>%
-  tangram("iris3", caption="Petal Length (dplyr example)", style="nejm", id="iris3")
+  tangram("iris3", caption="Petal Length (dplyr example)", style="nejm")
 ```
 
 <br/>
