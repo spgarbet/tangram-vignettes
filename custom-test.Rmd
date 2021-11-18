@@ -1,0 +1,162 @@
+---
+title: "Custom Tests"
+author: "Shawn Garbett"
+date: "11/17/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tangram)
+```
+
+## The Problem
+
+Suppose one wanted custom tests for a demographics table. Instead of the provided
+non-parametric tests one wanted a *t*-test?
+
+
+```{r defaults}
+tangram(sex ~ bili + drug, style="nejm", test=TRUE, data=pbc)
+```
+
+One can pass a function into the test. However, this function has to match 
+the type dispatching that is done by the normal test functions.
+
+```{r new_test}
+mytest <- function(row, col, cell_style, ...)
+{
+  datar <- row$data
+  datac <- col$data
+  rtype <- hmisc_data_type(datar)
+  ctype <- hmisc_data_type(datac)
+  
+  if(rtype == "Numerical" && ctype == "Numerical")
+  {
+     stat <- suppressWarnings(
+       cor.test(datar, datac,
+         alternate="two.sided", method="spearman",
+         na.action=na.omit, exact=FALSE)
+      )
+     hmisc_spearman(
+       stat$statistic,
+       render_f(estimate, row$format),
+       hmisc_p(stat$p.value, NULL)
+     )
+
+  } else if(rtype =="Categorical" && ctype == "Categorical")
+  {
+    grid <- table(as.categorical(datar), as.categorical(datac),useNA="no")
+    if(is.na(colnames(grid)[ncol(grid)])) grid <- grid[,1:(ncol(grid)-1)]
+
+    validcol  <- which(!apply(grid,2,FUN = function(x){all(x == 0)}))
+    validrow  <- which(!apply(grid,1,FUN = function(x){all(x == 0)}))
+    stat      <- if(length(validrow) < 2 || length(validcol) < 2) NA else                                     suppressWarnings(chisq.test(grid[validrow,validcol], correct=FALSE))
+    if(any(is.na(stat))) cell("NA") else
+      hmisc_chi2(
+        render_f(stat$statistic, 2),
+        stat$parameter,
+        hmisc_p(stat$p.value, NULL)
+      )
+  } else { # Num X Cat or Cat x Num
+    stat <- if(rtype == "Numerical")
+    {
+      suppressWarnings(tangram:::spearman2.default(datac, datar, na.action=na.retain))
+    } else {
+      suppressWarnings(tangram:::spearman2.default(datar, datac, na.action=na.retain))
+    }
+    hmisc_fstat(f   = render_f(stat['F'], "%.2f"),
+                df1 = stat['df1'],
+                df2 = stat['df2'],
+                p   = hmisc_p(stat['P'], NULL))
+    }
+} 
+
+
+tangram(sex ~ bili + drug, style="nejm", test=mytest, data=pbc)
+```
+
+That's a lot of code. This is what the logic of the default test function in the hmisc
+transform. It's making a lot of decisions, and now we wish to change that. 
+
+What we're going to do now, is if the number of categories is 2 apply a *t*-test instead.
+
+```{r ttest}
+mytest <- function(row, col, cell_style, ...)
+{
+  datar <- row$data
+  datac <- col$data
+  rtype <- hmisc_data_type(datar)
+  ctype <- hmisc_data_type(datac)
+
+  if(rtype == "Numerical" && ctype == "Numerical")
+  {
+     stat <- suppressWarnings(
+       cor.test(datar, datac,
+         alternate="two.sided", method="spearman",
+         na.action=na.omit, exact=FALSE)
+      )
+     hmisc_spearman(
+       stat$statistic,
+       render_f(estimate, row$format),
+       hmisc_p(stat$p.value, NULL)
+     )
+
+  } else if(rtype =="Categorical" && ctype == "Categorical")
+  {
+    grid <- table(as.categorical(datar), as.categorical(datac),useNA="no")
+    if(is.na(colnames(grid)[ncol(grid)])) grid <- grid[,1:(ncol(grid)-1)]
+
+    validcol  <- which(!apply(grid,2,FUN = function(x){all(x == 0)}))
+    validrow  <- which(!apply(grid,1,FUN = function(x){all(x == 0)}))
+    stat      <- if(length(validrow) < 2 || length(validcol) < 2) NA else
+      suppressWarnings(chisq.test(grid[validrow,validcol], correct=FALSE))
+    if(any(is.na(stat))) cell("NA") else
+      hmisc_chi2(
+        render_f(stat$statistic, 2),
+        stat$parameter,
+        hmisc_p(stat$p.value, NULL)
+      )
+  } else { # Num X Cat or Cat x Num
+    if(rtype == "Categorical")
+    {
+      # Make it Num x Cat
+      tmp   <- datac
+      datac <- datar
+      datar <- tmp
+    }
+    
+    if(length(levels(datac)) == 2)
+    {
+      x <- datar[datac == levels(datac)[1]]
+      y <- datar[datac == levels(datac)[2]]
+      stat <- t.test(x, y)
+      cell(paste0("*t* = ",
+                  round(stat$statistic, 2),
+                  ", ",
+                  hmisc_p(stat$p.value, NULL),
+                  "^4^"),
+           class=c("statistics"),
+           ...)
+    } else {
+      stat <- suppressWarnings(tangram:::spearman2.default(datar, datac, na.action=na.retain))
+      hmisc_fstat(f   = render_f(stat['F'], "%.2f"),
+                  df1 = stat['df1'],
+                  df2 = stat['df2'],
+                  p   = hmisc_p(stat['P'], NULL))
+    }
+  }
+} 
+
+
+tangram(sex ~ bili + drug, style="nejm", test=mytest, data=pbc,
+        footnote="N is the number of non-missing value. ^1^Kruskal-Wallis. ^2^Pearson. ^3^Wilcoxon. ^4^*t*-test")
+```
+# Show Both
+
+```{r both}
+x <- tangram(sex ~ bili + drug, style="nejm", test=TRUE, data=pbc, footnote="N is the number of non-missing value. ^1^Kruskal-Wallis. ^2^Pearson. ^3^Wilcoxon. ^4^*t*-test")
+y <- tangram(sex ~ bili + drug, style="nejm", test=mytest, data=pbc,
+        ) %>% del_col(1:4)
+cbind(x,y)
+```
